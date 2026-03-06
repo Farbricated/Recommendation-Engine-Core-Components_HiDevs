@@ -1,1 +1,11 @@
-# Add your project dependencies here
+# Day 29 Project — Python Dependencies
+# Core modules use only the Python standard library (math, sys, re).
+# No pip install needed to run similarity.py, candidate_gen.py, scorer.py, evaluator.py, or test.py.
+
+# ── Optional future extensions ──────────────────────────────────────────
+# Uncomment below only if you extend the project:
+
+# numpy>=1.24.0          # faster vector math
+# scikit-learn>=1.3.0    # additional similarity & evaluation metrics
+# pandas>=2.0.0          # tabular data handling
+# faiss-cpu>=1.7.4       # production-grade ANN vector search
