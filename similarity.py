@@ -1,116 +1,133 @@
 """
 similarity.py
 ─────────────
-Functions to measure how similar two items are.
-Supports cosine similarity, Jaccard similarity, and dot-product similarity.
-All vectors are represented as plain Python dicts (sparse) or lists (dense).
+Component 1: SimilarityCalculator
+Measures how similar two users, items, or skill sets are.
+Foundation of all recommendation logic.
 """
 
 import math
 
 
-# ── Dense-vector helpers ──────────────────────────────────────────────────────
-
-def dot_product(vec_a: list[float], vec_b: list[float]) -> float:
-    """Return the dot product of two equal-length vectors."""
-    if len(vec_a) != len(vec_b):
-        raise ValueError("Vectors must have the same length.")
-    return sum(a * b for a, b in zip(vec_a, vec_b))
-
-
-def magnitude(vec: list[float]) -> float:
-    """Return the Euclidean magnitude (L2 norm) of a vector."""
-    return math.sqrt(sum(x ** 2 for x in vec))
-
-
-def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+class SimilarityCalculator:
     """
-    Cosine similarity between two dense vectors.
-    Returns a value in [-1, 1]; higher means more similar.
-    Returns 0.0 if either vector is the zero vector.
+    Calculates similarity between users or items using three metrics:
+      - Cosine Similarity  : compare dense vectors (user/item embeddings)
+      - Jaccard Similarity : compare sets (skills, tags, genres)
+      - Pearson Correlation: compare rating patterns
     """
-    mag_a, mag_b = magnitude(vec_a), magnitude(vec_b)
-    if mag_a == 0.0 or mag_b == 0.0:
-        return 0.0
-    return dot_product(vec_a, vec_b) / (mag_a * mag_b)
 
+    # ── Cosine Similarity ─────────────────────────────────────────────────
 
-# ── Sparse-vector (dict) helpers ──────────────────────────────────────────────
+    def cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
+        """
+        Cosine similarity between two dense vectors.
+        Returns value in [-1, 1]. Higher = more similar.
+        Returns 0.0 for zero vectors.
 
-def cosine_similarity_sparse(vec_a: dict, vec_b: dict) -> float:
-    """
-    Cosine similarity for sparse vectors represented as {feature: value} dicts.
-    Efficient: only iterates over non-zero features.
-    """
-    # Dot product over shared keys
-    shared_keys = set(vec_a) & set(vec_b)
-    dot = sum(vec_a[k] * vec_b[k] for k in shared_keys)
+        Use case: 'Users/items with similar feature vectors.'
+        """
+        if len(vec1) != len(vec2):
+            raise ValueError("Vectors must be the same length.")
 
-    mag_a = math.sqrt(sum(v ** 2 for v in vec_a.values()))
-    mag_b = math.sqrt(sum(v ** 2 for v in vec_b.values()))
+        dot   = sum(a * b for a, b in zip(vec1, vec2))
+        mag1  = math.sqrt(sum(a ** 2 for a in vec1))
+        mag2  = math.sqrt(sum(b ** 2 for b in vec2))
 
-    if mag_a == 0.0 or mag_b == 0.0:
-        return 0.0
-    return dot / (mag_a * mag_b)
+        if mag1 == 0.0 or mag2 == 0.0:
+            return 0.0
 
+        return dot / (mag1 * mag2)
 
-# ── Set-based similarity ──────────────────────────────────────────────────────
+    # ── Jaccard Similarity ────────────────────────────────────────────────
 
-def jaccard_similarity(set_a: set, set_b: set) -> float:
-    """
-    Jaccard similarity: |A ∩ B| / |A ∪ B|.
-    Useful for comparing tags, genres, or keyword sets.
-    Returns 0.0 when both sets are empty.
-    """
-    if not set_a and not set_b:
-        return 0.0
-    intersection = len(set_a & set_b)
-    union        = len(set_a | set_b)
-    return intersection / union
+    def jaccard_similarity(self, set1: set, set2: set) -> float:
+        """
+        Jaccard similarity: |A ∩ B| / |A ∪ B|.
+        Returns value in [0, 1]. Returns 0.0 for two empty sets.
 
+        Use case: 'Users with overlapping skill sets or genre preferences.'
+        """
+        set1, set2 = set(set1), set(set2)
 
-# ── Text-based similarity ─────────────────────────────────────────────────────
+        if not set1 and not set2:
+            return 0.0
 
-def text_overlap_similarity(text_a: str, text_b: str) -> float:
-    """
-    Simple word-overlap similarity (bag-of-words Jaccard).
-    Lowercases and tokenises on whitespace before comparing.
-    """
-    words_a = set(text_a.lower().split())
-    words_b = set(text_b.lower().split())
-    return jaccard_similarity(words_a, words_b)
+        intersection = len(set1 & set2)
+        union        = len(set1 | set2)
+        return intersection / union
 
+    # ── Pearson Correlation ───────────────────────────────────────────────
 
-# ── Convenience wrapper ───────────────────────────────────────────────────────
+    def pearson_correlation(
+        self,
+        ratings1: dict[str, float],
+        ratings2: dict[str, float],
+    ) -> float:
+        """
+        Pearson correlation between two users' rating dictionaries.
+        Only considers items rated by BOTH users (co-rated items).
+        Returns value in [-1, 1]. Returns 0.0 if < 2 co-rated items.
 
-def compute_similarity(item_a: dict, item_b: dict, method: str = "cosine") -> float:
-    """
-    High-level similarity between two item dicts.
+        Use case: 'Users who rate items the same way have similar taste.'
 
-    Each item dict should have at least ONE of:
-        'vector'  – list[float]  (dense embedding)
-        'tags'    – set[str]     (genre / keyword tags)
-        'title'   – str          (text description)
+        Args:
+            ratings1: {item_id: rating}  e.g. {"movie_1": 4.5, "movie_2": 3.0}
+            ratings2: {item_id: rating}
+        """
+        # Find commonly rated items
+        common = set(ratings1.keys()) & set(ratings2.keys())
 
-    method: 'cosine' | 'jaccard' | 'text'
-    """
-    if method == "cosine":
-        va = item_a.get("vector")
-        vb = item_b.get("vector")
-        if va is None or vb is None:
-            raise ValueError("Both items need a 'vector' key for cosine similarity.")
-        return cosine_similarity(va, vb)
+        if len(common) < 2:
+            return 0.0   # Not enough data to correlate
 
-    elif method == "jaccard":
-        ta = set(item_a.get("tags", []))
-        tb = set(item_b.get("tags", []))
-        return jaccard_similarity(ta, tb)
+        n    = len(common)
+        r1   = [ratings1[i] for i in common]
+        r2   = [ratings2[i] for i in common]
 
-    elif method == "text":
-        return text_overlap_similarity(
-            item_a.get("title", ""),
-            item_b.get("title", ""),
-        )
+        mean1 = sum(r1) / n
+        mean2 = sum(r2) / n
 
-    else:
-        raise ValueError(f"Unknown method '{method}'. Use 'cosine', 'jaccard', or 'text'.")
+        # Deviations from mean
+        d1 = [x - mean1 for x in r1]
+        d2 = [x - mean2 for x in r2]
+
+        numerator   = sum(a * b for a, b in zip(d1, d2))
+        denominator = math.sqrt(sum(a**2 for a in d1)) * math.sqrt(sum(b**2 for b in d2))
+
+        if denominator == 0.0:
+            return 0.0
+
+        # Clamp to [-1, 1] to handle floating point edge cases
+        return max(-1.0, min(1.0, numerator / denominator))
+
+    # ── Convenience wrapper ───────────────────────────────────────────────
+
+    def most_similar(
+        self,
+        target_id: str,
+        all_vectors: dict[str, list[float]],
+        top_k: int = 5,
+    ) -> list[tuple[str, float]]:
+        """
+        Find the top-k most similar items/users to target_id using cosine similarity.
+
+        Args:
+            target_id:   ID of the item/user to compare against.
+            all_vectors: {id: vector} for every item/user.
+            top_k:       How many neighbours to return.
+
+        Returns:
+            List of (id, similarity_score) sorted descending.
+        """
+        if target_id not in all_vectors:
+            return []
+
+        target_vec = all_vectors[target_id]
+        scores = [
+            (other_id, self.cosine_similarity(target_vec, vec))
+            for other_id, vec in all_vectors.items()
+            if other_id != target_id
+        ]
+        scores.sort(key=lambda x: -x[1])
+        return scores[:top_k]

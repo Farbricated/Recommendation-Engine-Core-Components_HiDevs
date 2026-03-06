@@ -1,7 +1,7 @@
-# Day 29 Project — Recommendation System Pipeline
+# Day 29 Project — Recommendation Engine Core Components
 
-A modular recommendation engine built with pure Python (standard library only).
-Covers similarity calculation, candidate generation, scoring/ranking, and evaluation metrics.
+A modular recommendation engine built with **pure Python** (standard library only — no pip install needed).  
+Implements four class-based components that mirror how platforms like Netflix and Amazon suggest items.
 
 ---
 
@@ -9,156 +9,171 @@ Covers similarity calculation, candidate generation, scoring/ranking, and evalua
 
 ```
 day29_project/
-├── similarity.py      # Cosine, Jaccard, and text similarity functions
-├── candidate_gen.py   # Fast candidate filtering (tags, vectors, history, popularity)
-├── scorer.py          # Multi-signal scoring and diversity-aware ranking
-├── evaluator.py       # Precision@K, Recall@K, NDCG, MAP, Coverage, Diversity
-└── test.py            # 79 test cases covering all modules + end-to-end
+├── similarity.py      # SimilarityCalculator  — cosine, jaccard, pearson
+├── candidate_gen.py   # CandidateGenerator    — collaborative, content-based, popularity, hybrid
+├── scorer.py          # RecommendationScorer  — pluggable weighted scoring + ranking
+├── evaluator.py       # RecommendationEvaluator — precision, recall, ndcg, evaluate_all
+└── test.py            # 85 test cases across all components + end-to-end
 ```
 
 ---
 
 ## Requirements
 
-- **Python 3.10+** (uses `list[str]` and `set[str]` type hints)
-- **No external libraries** — only `math`, `sys`, and `re` from the standard library
+- **Python 3.10+**
+- **Zero external libraries** — uses only `math` and `sys` from the standard library
 
 ---
 
 ## How to Run
 
-### 1. Clone / download the project
+### 1. Clone the repo
 
 ```bash
 git clone https://github.com/your-username/day29_project.git
 cd day29_project
 ```
 
-### 2. (Optional) Create a virtual environment
+### 2. (Optional) Virtual environment
 
 ```bash
 python -m venv venv
-
-# Activate on Mac/Linux:
-source venv/bin/activate
-
-# Activate on Windows:
-venv\Scripts\activate
+source venv/bin/activate      # Mac/Linux
+venv\Scripts\activate         # Windows
 ```
 
-### 3. Install dependencies
-
-No packages needed. But if you want optional future extensions:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Run the tests
+### 3. Run the tests
 
 ```bash
 python test.py
 ```
 
 Expected output:
-
 ```
 ══════════════════════════════════════════════════
   Day 29 Project — Test Suite
 ══════════════════════════════════════════════════
-  Results: 79/79 passed 🎉 All tests passed!
+  Results: 85/85 passed 🎉 All tests passed!
 ══════════════════════════════════════════════════
 ```
 
-### 5. Use the modules in your own script
+---
+
+## Component Overview
+
+### Component 1 — `SimilarityCalculator` (`similarity.py`)
+
+Measures how similar two users or items are.
 
 ```python
-from similarity    import cosine_similarity, jaccard_similarity
-from candidate_gen import generate_candidates
-from scorer        import rank_candidates
-from evaluator     import evaluate, print_report
+from similarity import SimilarityCalculator
+sc = SimilarityCalculator()
 
-catalogue = {
-    "item_001": {
-        "title":  "The Matrix",
-        "tags":   {"sci-fi", "action", "cyberpunk"},
-        "vector": [0.9, 0.1, 0.8, 0.2],
-        "rating": 8.7,
-        "year":   1999,
-    },
-    "item_002": {
-        "title":  "Blade Runner 2049",
-        "tags":   {"sci-fi", "drama", "cyberpunk"},
-        "vector": [0.8, 0.2, 0.7, 0.3],
-        "rating": 8.0,
-        "year":   2017,
-    },
-}
-
-# Step 1 — generate candidates
-candidates = generate_candidates(
-    catalogue,
-    query_tags={"sci-fi", "action"},
-    liked_item_ids=["item_001"],
-)
-
-# Step 2 — rank them
-ranked = rank_candidates(catalogue, candidates, query_tags={"sci-fi"}, top_k=5)
-for item in ranked:
-    print(f"{item['title']:30s}  score={item['_score']}")
-
-# Step 3 — evaluate
-recommended_ids = [r["id"] for r in ranked]
-report = evaluate(recommended_ids, relevant={"item_002"}, catalogue=catalogue)
-print_report(report)
+sc.cosine_similarity([1, 0, 0], [1, 0, 0])          # → 1.0
+sc.jaccard_similarity({"sci-fi", "action"}, {"sci-fi", "drama"})  # → 0.333
+sc.pearson_correlation({"m1": 5, "m2": 3}, {"m1": 5, "m2": 3})   # → 1.0
+sc.most_similar("user_A", all_user_vectors, top_k=5)
 ```
 
----
-
-## Module Overview
-
-| Module | Key Functions |
-|---|---|
-| `similarity.py` | `cosine_similarity`, `jaccard_similarity`, `text_overlap_similarity`, `compute_similarity` |
-| `candidate_gen.py` | `generate_candidates`, `candidates_by_tags`, `candidates_by_vector`, `candidates_by_popularity` |
-| `scorer.py` | `rank_candidates`, `compute_score`, `explain_score` |
-| `evaluator.py` | `evaluate`, `precision_at_k`, `recall_at_k`, `ndcg_at_k`, `coverage`, `intra_list_diversity` |
+| Method | Input | Output | Use Case |
+|---|---|---|---|
+| `cosine_similarity` | two float lists | [-1, 1] | User/item embeddings |
+| `jaccard_similarity` | two sets | [0, 1] | Tags, skills, genres |
+| `pearson_correlation` | two rating dicts | [-1, 1] | Rating patterns |
+| `most_similar` | id + vector dict | ranked list | Finding neighbours |
 
 ---
 
-## Scoring Signals (scorer.py)
+### Component 2 — `CandidateGenerator` (`candidate_gen.py`)
 
-| Signal | Default Weight | Description |
+Generates a pool of candidate items before scoring.
+
+```python
+from candidate_gen import CandidateGenerator
+gen = CandidateGenerator()
+
+gen.collaborative_candidates("user_A")   # items liked by similar users
+gen.content_based_candidates("user_A")  # items matching user's taste tags
+gen.popularity_candidates()             # top-rated items (cold-start)
+gen.hybrid_candidates("user_A")         # best of all three
+```
+
+All methods handle **cold-start** (new users with no history) by falling back to popularity.
+
+---
+
+### Component 3 — `RecommendationScorer` (`scorer.py`)
+
+Scores candidates and returns a ranked list with explanations.
+
+```python
+from scorer import RecommendationScorer
+scorer = RecommendationScorer()
+
+# Add a custom scorer
+scorer.add_scorer("my_signal", lambda u, i, ctx: 0.9, weight=0.3)
+
+# Score one item
+result = scorer.calculate_score("user_A", "item_7")
+# → {"total": 0.82, "signals": {"relevance": 1.0, ...}, "reason": "..."}
+
+# Rank all candidates
+ranked = scorer.rank_candidates("user_A", ["item_4", "item_5", "item_7"], limit=5)
+```
+
+**Default signals:**
+
+| Signal | Weight | Description |
 |---|---|---|
-| Similarity | 0.50 | Cosine (vector) or Jaccard (tags) match to query |
-| Popularity | 0.25 | Normalised item rating (0–10 scale) |
-| Recency | 0.15 | Exponential decay based on item age |
-| Diversity | 0.10 | Penalty for redundancy with already-ranked items |
+| Relevance | 0.50 | Tag overlap with user's liked items |
+| Popularity | 0.30 | Normalised item rating |
+| Recency | 0.20 | How new the item is |
 
-Override weights per call:
+---
+
+### Component 4 — `RecommendationEvaluator` (`evaluator.py`)
+
+Measures recommendation quality with offline metrics.
 
 ```python
-rank_candidates(
-    catalogue, candidates,
-    weights={"similarity": 0.7, "popularity": 0.3, "recency": 0.0, "diversity": 0.0}
-)
+from evaluator import RecommendationEvaluator
+ev = RecommendationEvaluator()
+
+ev.precision_at_k(recommendations, relevant_items, k=5)  # % relevant in top-k
+ev.recall_at_k(recommendations, relevant_items, k=5)     # % of relevant found
+ev.ndcg_at_k(recommendations, relevant_items, k=5)       # position-weighted score
+
+# Evaluate across all users at once
+report = ev.evaluate_all(recs_dict, ground_truth_dict, k=10)
+ev.print_report(report)
 ```
 
 ---
 
-## Quick One-liners
+## End-to-End Example
 
-```bash
-# Test cosine similarity
-python -c "from similarity import cosine_similarity; print(cosine_similarity([1,0],[0,1]))"
-# → 0.0
+```python
+from candidate_gen import CandidateGenerator
+from scorer        import RecommendationScorer
+from evaluator     import RecommendationEvaluator
 
-# Score breakdown for one item
-python -c "
-from scorer import explain_score
-item = {'vector': [0.9, 0.1], 'tags': {'sci-fi'}, 'rating': 8.5, 'year': 2020}
-print(explain_score(item, query_vector=[0.9, 0.1]))
-"
+gen    = CandidateGenerator()
+scorer = RecommendationScorer()
+ev     = RecommendationEvaluator()
+
+# 1. Generate candidates
+candidates = gen.hybrid_candidates("user_A")
+
+# 2. Rank them
+ranked = scorer.rank_candidates("user_A", candidates, limit=10)
+for r in ranked:
+    print(f"{r['item_id']}  {r['total']:.2f}  {r['reason']}")
+
+# 3. Evaluate
+recs_dict    = {"user_A": [r["item_id"] for r in ranked]}
+ground_truth = {"user_A": {"item_4", "item_5", "item_7"}}
+report       = ev.evaluate_all(recs_dict, ground_truth, k=5)
+ev.print_report(report)
 ```
 
 ---

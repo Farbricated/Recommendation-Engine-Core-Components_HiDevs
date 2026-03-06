@@ -1,213 +1,185 @@
 """
 scorer.py
 ─────────
-Scores and ranks candidate items for a given user/query context.
-Combines multiple signals (similarity, popularity, recency, diversity)
-into a single final score, then returns a ranked list.
+Component 3: RecommendationScorer
+Scores candidate items and produces a final ranked list.
+Supports pluggable, weighted scoring functions with explanations.
 """
 
-import math
-from similarity import cosine_similarity, jaccard_similarity
+from candidate_gen import ITEM_CATALOGUE, USER_HISTORY
 
 
-# ── Individual scoring signals ────────────────────────────────────────────────
+# ── Sample rating data (replaces a database for now) ──────────────────────────
 
-def score_similarity(
-    item: dict,
-    query_vector: list[float] | None = None,
-    query_tags:   set[str]   | None = None,
-) -> float:
+USER_RATINGS: dict[str, dict[str, float]] = {
+    "user_A": {"item_1": 4.5, "item_2": 3.0, "item_3": 5.0},
+    "user_B": {"item_2": 4.0, "item_3": 4.5, "item_4": 2.0},
+    "user_C": {"item_3": 3.5, "item_4": 4.0, "item_5": 4.8},
+    "user_D": {"item_1": 5.0, "item_5": 3.0, "item_6": 4.2},
+}
+
+
+class RecommendationScorer:
     """
-    Similarity score in [0, 1].
-    Uses cosine similarity if vectors are available; falls back to Jaccard tags.
+    Pluggable, weighted scorer for recommendation candidates.
+
+    Usage:
+        scorer = RecommendationScorer()
+        scorer.add_scorer("popularity", my_popularity_fn, weight=0.4)
+        scorer.add_scorer("recency",    my_recency_fn,    weight=0.6)
+        ranked = scorer.rank_candidates("user_A", ["item_4", "item_5"], limit=5)
     """
-    if query_vector and item.get("vector"):
-        return max(0.0, cosine_similarity(query_vector, item["vector"]))
 
-    if query_tags and item.get("tags"):
-        return jaccard_similarity(query_tags, set(item["tags"]))
+    def __init__(
+        self,
+        item_catalogue: dict | None = None,
+        user_history:   dict | None = None,
+        user_ratings:   dict | None = None,
+    ):
+        self.item_catalogue = item_catalogue or ITEM_CATALOGUE
+        self.user_history   = user_history   or USER_HISTORY
+        self.user_ratings   = user_ratings   or USER_RATINGS
 
-    return 0.0
+        # Registry: {name: {"fn": callable, "weight": float}}
+        self._scorers: dict[str, dict] = {}
 
+        # Register default built-in scorers
+        self.add_scorer("relevance",  self._score_relevance,  weight=0.50)
+        self.add_scorer("popularity", self._score_popularity, weight=0.30)
+        self.add_scorer("recency",    self._score_recency,    weight=0.20)
 
-def score_popularity(item: dict, max_rating: float = 10.0) -> float:
-    """
-    Normalised popularity score in [0, 1] based on item rating.
-    """
-    rating = item.get("rating", 0.0)
-    return min(max(rating / max_rating, 0.0), 1.0)
+    # ── Scorer Registration ───────────────────────────────────────────────
 
+    def add_scorer(self, name: str, function, weight: float) -> None:
+        """
+        Register a scoring function.
 
-def score_recency(item: dict, current_year: int = 2024, decay: float = 0.05) -> float:
-    """
-    Recency score in (0, 1] using exponential decay.
-    Newer items score closer to 1; very old items approach 0.
+        Args:
+            name:     Unique label for this scorer (used in explanations).
+            function: Callable(user_id, item_id, context) → float in [0, 1].
+            weight:   Relative importance. Weights are normalised automatically.
+        """
+        if weight < 0:
+            raise ValueError(f"Weight for '{name}' must be >= 0.")
+        self._scorers[name] = {"fn": function, "weight": weight}
 
-    decay: how fast older items fade (higher = faster decay).
-    """
-    year = item.get("year", current_year)
-    age  = max(current_year - year, 0)
-    return math.exp(-decay * age)
+    # ── Built-in Scoring Functions ────────────────────────────────────────
 
+    def _score_relevance(self, user_id: str, item_id: str, context: dict) -> float:
+        """
+        Tag-overlap relevance: fraction of item's tags matching user's taste profile.
+        """
+        user_items = self.user_history.get(user_id, set())
+        liked_tags: set[str] = set()
+        for uid in user_items:
+            liked_tags |= self.item_catalogue.get(uid, {}).get("tags", set())
 
-def score_diversity_penalty(
-    item_id: str,
-    item: dict,
-    already_selected: list[dict],
-    penalty: float = 0.3,
-) -> float:
-    """
-    Returns a penalty in [0, 1] if this item is too similar to items already
-    in the result list. 1.0 means no penalty; lower values penalise redundancy.
+        item_tags = self.item_catalogue.get(item_id, {}).get("tags", set())
+        if not item_tags:
+            return 0.0
+        return len(liked_tags & item_tags) / len(item_tags)
 
-    Uses tag Jaccard similarity against already-selected items.
-    """
-    if not already_selected:
-        return 1.0   # no penalty when list is empty
+    def _score_popularity(self, user_id: str, item_id: str, context: dict) -> float:
+        """Normalised popularity score (catalogue max = 10.0)."""
+        raw = self.item_catalogue.get(item_id, {}).get("popularity", 0.0)
+        return min(max(raw / 10.0, 0.0), 1.0)
 
-    item_tags = set(item.get("tags", []))
-    max_sim   = max(
-        jaccard_similarity(item_tags, set(sel.get("tags", [])))
-        for sel in already_selected
-    )
-    # Convert similarity → diversity weight: high similarity → lower weight
-    return 1.0 - (penalty * max_sim)
-
-
-# ── Combined scoring ──────────────────────────────────────────────────────────
-
-def compute_score(
-    item: dict,
-    query_vector:     list[float] | None = None,
-    query_tags:       set[str]   | None = None,
-    weights:          dict       | None = None,
-    already_selected: list[dict] | None = None,
-) -> float:
-    """
-    Weighted combination of all scoring signals.
-
-    Default weights:
-        similarity  0.50
-        popularity  0.25
-        recency     0.15
-        diversity   0.10
-
-    Args:
-        item:             The item dict to score.
-        query_vector:     Optional dense query embedding.
-        query_tags:       Optional set of query tags.
-        weights:          Override default signal weights.
-        already_selected: Items already picked (for diversity penalty).
-
-    Returns:
-        Float score in [0, 1].
-    """
-    default_weights = {
-        "similarity": 0.50,
-        "popularity": 0.25,
-        "recency":    0.15,
-        "diversity":  0.10,
-    }
-    w = {**default_weights, **(weights or {})}
-
-    sim_score  = score_similarity(item, query_vector, query_tags)
-    pop_score  = score_popularity(item)
-    rec_score  = score_recency(item)
-    div_factor = score_diversity_penalty(
-        item.get("id", ""), item, already_selected or []
-    )
-
-    raw = (
-        w["similarity"] * sim_score
-        + w["popularity"] * pop_score
-        + w["recency"]    * rec_score
-    )
-    # Diversity is a multiplicative penalty so it never inflates the score
-    return raw * (w["diversity"] + (1 - w["diversity"]) * div_factor)
-
-
-# ── Ranking ───────────────────────────────────────────────────────────────────
-
-def rank_candidates(
-    catalogue:    dict,
-    candidate_ids: list[str],
-    query_vector:  list[float] | None = None,
-    query_tags:    set[str]   | None = None,
-    weights:       dict       | None = None,
-    top_k:         int = 10,
-    diversity:     bool = True,
-) -> list[dict]:
-    """
-    Score and rank all candidate items, return the top-k results.
-
-    Args:
-        catalogue:     Full item catalogue {item_id: item_dict}.
-        candidate_ids: Pre-filtered candidate IDs from candidate_gen.
-        query_vector:  Optional dense query embedding.
-        query_tags:    Optional tag set for the query.
-        weights:       Custom signal weights (see compute_score).
-        top_k:         Number of results to return.
-        diversity:     If True, apply incremental diversity penalty.
-
-    Returns:
-        List of item dicts (with 'id' and '_score' injected), sorted best-first.
-    """
-    scored_items: list[tuple[float, dict]] = []
-    selected: list[dict] = []    # grows as we pick items (for diversity)
-
-    # First pass: score all candidates
-    all_scored = []
-    for item_id in candidate_ids:
-        item = catalogue.get(item_id)
-        if item is None:
-            continue
-        item_with_id = {**item, "id": item_id}
-        score = compute_score(item_with_id, query_vector, query_tags, weights, [])
-        all_scored.append((score, item_with_id))
-
-    # Sort by score descending
-    all_scored.sort(key=lambda x: -x[0])
-
-    if not diversity:
-        results = []
-        for score, item in all_scored[:top_k]:
-            results.append({**item, "_score": round(score, 4)})
-        return results
-
-    # Second pass: greedy diversity-aware selection
-    remaining = list(all_scored)
-    while len(selected) < top_k and remaining:
-        best_score, best_item = -1.0, None
-        for score, item in remaining:
-            adjusted = compute_score(
-                item, query_vector, query_tags, weights, selected
+    def _score_recency(self, user_id: str, item_id: str, context: dict) -> float:
+        """
+        Recency proxy: uses item_id numeric suffix — higher number = newer.
+        In a real system this would use release or interaction timestamps.
+        """
+        try:
+            num = int(item_id.split("_")[-1])
+            max_num = max(
+                int(i.split("_")[-1])
+                for i in self.item_catalogue
+                if i.split("_")[-1].isdigit()
             )
-            if adjusted > best_score:
-                best_score = adjusted
-                best_item  = item
+            return num / max_num if max_num > 0 else 0.0
+        except (ValueError, ZeroDivisionError):
+            return 0.5   # neutral default
 
-        if best_item is None:
-            break
+    # ── Core Scoring ──────────────────────────────────────────────────────
 
-        selected.append({**best_item, "_score": round(best_score, 4)})
-        remaining = [(s, it) for s, it in remaining if it["id"] != best_item["id"]]
+    def calculate_score(
+        self,
+        user_id: str,
+        item_id: str,
+        context: dict | None = None,
+    ) -> dict:
+        """
+        Score a single (user, item) pair using all registered scorers.
 
-    return selected
+        Returns:
+            {
+                "total":   float,          # weighted combined score in [0, 1]
+                "signals": {name: score},  # individual signal breakdown
+                "reason":  str,            # human-readable explanation
+            }
+        """
+        if context is None:
+            context = {}
 
+        total_weight = sum(s["weight"] for s in self._scorers.values())
+        if total_weight == 0:
+            return {"total": 0.0, "signals": {}, "reason": "No scorers registered."}
 
-# ── Utility ───────────────────────────────────────────────────────────────────
+        signals: dict[str, float] = {}
+        weighted_sum = 0.0
 
-def explain_score(
-    item: dict,
-    query_vector: list[float] | None = None,
-    query_tags:   set[str]   | None = None,
-) -> dict:
-    """
-    Return a breakdown of every scoring signal for transparency / debugging.
-    """
-    return {
-        "similarity": round(score_similarity(item, query_vector, query_tags), 4),
-        "popularity":  round(score_popularity(item), 4),
-        "recency":     round(score_recency(item), 4),
-        "final":       round(compute_score(item, query_vector, query_tags), 4),
-    }
+        for name, scorer in self._scorers.items():
+            try:
+                raw_score = scorer["fn"](user_id, item_id, context)
+            except Exception:
+                raw_score = 0.0
+
+            # Clamp each signal to [0, 1]
+            clamped = min(max(float(raw_score), 0.0), 1.0)
+            signals[name] = round(clamped, 4)
+            weighted_sum += clamped * scorer["weight"]
+
+        total = weighted_sum / total_weight
+        total = round(min(max(total, 0.0), 1.0), 4)
+
+        # Build a human-readable reason from top signals
+        top_signal = max(signals, key=signals.get)
+        reason = (
+            f"Recommended because of high {top_signal} "
+            f"({signals[top_signal]:.0%}). "
+            f"Overall score: {total:.0%}."
+        )
+
+        return {"total": total, "signals": signals, "reason": reason}
+
+    # ── Ranking ───────────────────────────────────────────────────────────
+
+    def rank_candidates(
+        self,
+        user_id:    str,
+        candidates: list[str],
+        limit:      int = 10,
+        context:    dict | None = None,
+    ) -> list[dict]:
+        """
+        Score all candidates and return top `limit` results, sorted best-first.
+
+        Args:
+            user_id:    Target user.
+            candidates: List of item IDs to evaluate.
+            limit:      Maximum results to return.
+            context:    Optional extra context passed to scorer functions.
+
+        Returns:
+            List of dicts: [{"item_id", "total", "signals", "reason"}, ...]
+        """
+        if context is None:
+            context = {}
+
+        results = []
+        for item_id in candidates:
+            score_info = self.calculate_score(user_id, item_id, context)
+            results.append({"item_id": item_id, **score_info})
+
+        results.sort(key=lambda r: -r["total"])
+        return results[:limit]

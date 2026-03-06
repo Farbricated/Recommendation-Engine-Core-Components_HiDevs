@@ -1,59 +1,17 @@
 """
 test.py
 ───────
-Test suite for all four modules.
+Test suite for all four class-based components.
 Run with:   python test.py
-All tests use simple, hand-verifiable data — no external dependencies.
+No external dependencies required.
 """
 
-import math
 import sys
-
-# ── Shared sample data ────────────────────────────────────────────────────────
-
-CATALOGUE = {
-    "item_001": {
-        "title":  "The Matrix",
-        "tags":   {"sci-fi", "action", "cyberpunk"},
-        "vector": [0.9, 0.1, 0.8, 0.2],
-        "rating": 8.7,
-        "year":   1999,
-    },
-    "item_002": {
-        "title":  "Blade Runner 2049",
-        "tags":   {"sci-fi", "drama", "cyberpunk"},
-        "vector": [0.8, 0.2, 0.7, 0.3],
-        "rating": 8.0,
-        "year":   2017,
-    },
-    "item_003": {
-        "title":  "Toy Story",
-        "tags":   {"animation", "family", "comedy"},
-        "vector": [0.1, 0.9, 0.1, 0.8],
-        "rating": 8.3,
-        "year":   1995,
-    },
-    "item_004": {
-        "title":  "Inception",
-        "tags":   {"sci-fi", "thriller", "action"},
-        "vector": [0.7, 0.3, 0.6, 0.4],
-        "rating": 8.8,
-        "year":   2010,
-    },
-    "item_005": {
-        "title":  "Finding Nemo",
-        "tags":   {"animation", "family", "adventure"},
-        "vector": [0.2, 0.8, 0.2, 0.7],
-        "rating": 8.1,
-        "year":   2003,
-    },
-}
-
+import math
 
 # ── Test helpers ──────────────────────────────────────────────────────────────
 
-PASS = 0
-FAIL = 0
+PASS, FAIL = 0, 0
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     global PASS, FAIL
@@ -64,7 +22,7 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         print(f"  ❌  {name}" + (f"  →  {detail}" if detail else ""))
         FAIL += 1
 
-def close(a: float, b: float, tol: float = 1e-6) -> bool:
+def close(a: float, b: float, tol: float = 1e-5) -> bool:
     return abs(a - b) < tol
 
 def section(title: str) -> None:
@@ -72,442 +30,368 @@ def section(title: str) -> None:
     print(f"  {title}")
     print(f"{'─'*50}")
 
+# ── Sample data shared across tests ──────────────────────────────────────────
+
+CATALOGUE = {
+    "item_1": {"tags": {"sci-fi", "action"},    "category": "movie", "popularity": 9.2},
+    "item_2": {"tags": {"sci-fi", "drama"},     "category": "movie", "popularity": 8.5},
+    "item_3": {"tags": {"sci-fi", "thriller"},  "category": "movie", "popularity": 8.8},
+    "item_4": {"tags": {"drama", "romance"},    "category": "movie", "popularity": 7.9},
+    "item_5": {"tags": {"action", "comedy"},    "category": "movie", "popularity": 8.1},
+    "item_6": {"tags": {"animation", "family"}, "category": "movie", "popularity": 8.3},
+    "item_7": {"tags": {"sci-fi", "comedy"},    "category": "movie", "popularity": 7.5},
+    "item_8": {"tags": {"thriller", "horror"},  "category": "movie", "popularity": 7.2},
+}
+
+HISTORY = {
+    "user_A": {"item_1", "item_2", "item_3"},
+    "user_B": {"item_2", "item_3", "item_4"},
+    "user_C": {"item_3", "item_4", "item_5"},
+    "user_D": {"item_1", "item_5", "item_6"},
+    "new_user": set(),   # cold-start
+}
 
 # ══════════════════════════════════════════════════════
-#  MODULE 1 — similarity.py
+#  Component 1 — SimilarityCalculator
 # ══════════════════════════════════════════════════════
 
 def test_similarity():
-    section("similarity.py")
-    from similarity import (
-        dot_product,
-        magnitude,
-        cosine_similarity,
-        cosine_similarity_sparse,
-        jaccard_similarity,
-        text_overlap_similarity,
-        compute_similarity,
-    )
+    section("Component 1: SimilarityCalculator")
+    from similarity import SimilarityCalculator
+    sc = SimilarityCalculator()
 
-    # dot_product
-    check("dot_product basic",
-          close(dot_product([1, 2, 3], [4, 5, 6]), 32.0))
+    # ── cosine_similarity ─────────────────────────────────────────────────
+    check("cosine: identical vectors = 1.0",
+          close(sc.cosine_similarity([1, 0, 0], [1, 0, 0]), 1.0))
 
-    check("dot_product zeros",
-          close(dot_product([0, 0], [1, 2]), 0.0))
+    check("cosine: orthogonal vectors = 0.0",
+          close(sc.cosine_similarity([1, 0], [0, 1]), 0.0))
 
-    # magnitude
-    check("magnitude [3, 4] = 5",
-          close(magnitude([3.0, 4.0]), 5.0))
+    check("cosine: opposite vectors = -1.0",
+          close(sc.cosine_similarity([1, 0], [-1, 0]), -1.0))
 
-    check("magnitude zero vector",
-          close(magnitude([0.0, 0.0]), 0.0))
+    check("cosine: zero vector = 0.0",
+          close(sc.cosine_similarity([0, 0], [1, 2]), 0.0))
 
-    # cosine_similarity
-    check("cosine_similarity identical vectors = 1",
-          close(cosine_similarity([1, 0, 0], [1, 0, 0]), 1.0))
+    check("cosine: [1,1] vs [1,0] ≈ 0.707",
+          close(sc.cosine_similarity([1, 1], [1, 0]), 1 / math.sqrt(2)))
 
-    check("cosine_similarity orthogonal vectors = 0",
-          close(cosine_similarity([1, 0], [0, 1]), 0.0))
+    check("cosine: result in [-1, 1]",
+          -1.0 <= sc.cosine_similarity([3, 4], [1, 2]) <= 1.0)
 
-    check("cosine_similarity opposite vectors = -1",
-          close(cosine_similarity([1, 0], [-1, 0]), -1.0))
+    # ── jaccard_similarity ────────────────────────────────────────────────
+    check("jaccard: identical sets = 1.0",
+          close(sc.jaccard_similarity({"a", "b"}, {"a", "b"}), 1.0))
 
-    check("cosine_similarity zero vector = 0",
-          close(cosine_similarity([0, 0], [1, 2]), 0.0))
+    check("jaccard: disjoint sets = 0.0",
+          close(sc.jaccard_similarity({"a"}, {"b"}), 0.0))
 
-    sim = cosine_similarity([1, 1], [1, 0])
-    check("cosine_similarity [1,1] vs [1,0] ≈ 0.707",
-          close(sim, 1 / math.sqrt(2), tol=1e-5))
+    check("jaccard: partial overlap = 1/3",
+          close(sc.jaccard_similarity({"a", "b"}, {"b", "c"}), 1/3))
 
-    # cosine_similarity_sparse
-    sim_sparse = cosine_similarity_sparse({"a": 1.0, "b": 1.0}, {"a": 1.0})
-    check("cosine_similarity_sparse partial overlap ≈ 0.707",
-          close(sim_sparse, 1 / math.sqrt(2), tol=1e-5))
+    check("jaccard: both empty sets = 0.0",
+          close(sc.jaccard_similarity(set(), set()), 0.0))
 
-    check("cosine_similarity_sparse no overlap = 0",
-          close(cosine_similarity_sparse({"a": 1}, {"b": 1}), 0.0))
+    check("jaccard: list inputs work too",
+          close(sc.jaccard_similarity(["x", "y"], ["y", "z"]), 1/3))
 
-    # jaccard_similarity
-    check("jaccard identical sets = 1",
-          close(jaccard_similarity({"a", "b"}, {"a", "b"}), 1.0))
+    # ── pearson_correlation ───────────────────────────────────────────────
+    r1 = {"movie_1": 5.0, "movie_2": 4.0, "movie_3": 3.0}
+    r2 = {"movie_1": 5.0, "movie_2": 4.0, "movie_3": 3.0}
+    check("pearson: identical ratings = 1.0",
+          close(sc.pearson_correlation(r1, r2), 1.0))
 
-    check("jaccard disjoint sets = 0",
-          close(jaccard_similarity({"a"}, {"b"}), 0.0))
+    r3 = {"movie_1": 1.0, "movie_2": 2.0, "movie_3": 3.0}
+    check("pearson: reversed ratings = -1.0",
+          close(sc.pearson_correlation(r1, r3), -1.0))
 
-    check("jaccard partial overlap",
-          close(jaccard_similarity({"a", "b"}, {"b", "c"}), 1/3, tol=1e-5))
+    r4 = {"movie_X": 5.0, "movie_Y": 3.0}   # no overlap with r1
+    check("pearson: no common items = 0.0",
+          close(sc.pearson_correlation(r1, r4), 0.0))
 
-    check("jaccard both empty = 0",
-          close(jaccard_similarity(set(), set()), 0.0))
+    check("pearson: one common item = 0.0 (not enough)",
+          close(sc.pearson_correlation({"a": 4.0}, {"a": 4.0}), 0.0))
 
-    # text_overlap_similarity
-    check("text_overlap identical sentences = 1",
-          close(text_overlap_similarity("hello world", "hello world"), 1.0))
+    check("pearson: result in [-1, 1]",
+          -1.0 <= sc.pearson_correlation(r1, r3) <= 1.0)
 
-    check("text_overlap no common words = 0",
-          close(text_overlap_similarity("cat dog", "fish bird"), 0.0))
+    r5 = {"m1": 4.0, "m2": 5.0, "m3": 2.0}
+    r6 = {"m1": 3.5, "m2": 4.5, "m3": 1.5}
+    check("pearson: similar patterns → high positive",
+          sc.pearson_correlation(r5, r6) > 0.9)
 
-    tov = text_overlap_similarity("the quick brown fox", "the slow brown dog")
-    check("text_overlap partial (the, brown) = 2/6 = 0.333",
-          close(tov, 2/6, tol=1e-5))
-
-    # compute_similarity (high-level)
-    item_a = {"vector": [1.0, 0.0], "tags": {"sci-fi", "action"}, "title": "Movie A"}
-    item_b = {"vector": [1.0, 0.0], "tags": {"sci-fi", "drama"},  "title": "Movie A"}
-
-    check("compute_similarity cosine identical = 1",
-          close(compute_similarity(item_a, item_b, method="cosine"), 1.0))
-
-    check("compute_similarity jaccard partial",
-          compute_similarity(item_a, item_b, method="jaccard") > 0)
-
-    check("compute_similarity text identical = 1",
-          close(compute_similarity(item_a, item_b, method="text"), 1.0))
+    # ── most_similar ──────────────────────────────────────────────────────
+    vectors = {
+        "A": [1.0, 0.0],
+        "B": [0.9, 0.1],
+        "C": [0.0, 1.0],
+    }
+    results = sc.most_similar("A", vectors, top_k=2)
+    check("most_similar: returns top-k neighbours",
+          len(results) == 2)
+    check("most_similar: B is closest to A",
+          results[0][0] == "B")
+    check("most_similar: unknown ID returns empty",
+          sc.most_similar("Z", vectors) == [])
 
 
 # ══════════════════════════════════════════════════════
-#  MODULE 2 — candidate_gen.py
+#  Component 2 — CandidateGenerator
 # ══════════════════════════════════════════════════════
 
 def test_candidate_gen():
-    section("candidate_gen.py")
-    from candidate_gen import (
-        candidates_by_tags,
-        candidates_by_vector,
-        candidates_from_history,
-        candidates_by_popularity,
-        generate_candidates,
-    )
+    section("Component 2: CandidateGenerator")
+    from candidate_gen import CandidateGenerator
+    gen = CandidateGenerator(user_history=HISTORY, item_catalogue=CATALOGUE, limit=20)
 
-    # candidates_by_tags
-    sci_fi_candidates = candidates_by_tags(CATALOGUE, {"sci-fi"}, min_overlap=1)
-    check("candidates_by_tags finds sci-fi movies",
-          all(c in sci_fi_candidates for c in ["item_001", "item_002", "item_004"]))
+    # ── collaborative_candidates ──────────────────────────────────────────
+    collab = gen.collaborative_candidates("user_A")
+    check("collaborative: returns a list",
+          isinstance(collab, list))
+    check("collaborative: excludes already-liked items",
+          all(item not in HISTORY["user_A"] for item in collab))
+    check("collaborative: within limit",
+          len(collab) <= 20)
 
-    check("candidates_by_tags excludes non-matching",
-          "item_003" not in sci_fi_candidates)
+    collab_new = gen.collaborative_candidates("new_user")
+    check("collaborative: cold-start fallback returns items",
+          len(collab_new) > 0)
 
-    check("candidates_by_tags respects limit",
-          len(candidates_by_tags(CATALOGUE, {"sci-fi"}, limit=2)) <= 2)
+    # ── content_based_candidates ──────────────────────────────────────────
+    content = gen.content_based_candidates("user_A")
+    check("content-based: returns a list",
+          isinstance(content, list))
+    check("content-based: excludes already-liked items",
+          all(item not in HISTORY["user_A"] for item in content))
+    check("content-based: within limit",
+          len(content) <= 20)
 
-    no_match = candidates_by_tags(CATALOGUE, {"fantasy"}, min_overlap=1)
-    check("candidates_by_tags returns empty when no match",
-          len(no_match) == 0)
+    # user_A likes sci-fi items → item_7 (sci-fi) should be in candidates
+    check("content-based: finds sci-fi matches for user_A",
+          "item_7" in content)
 
-    # candidates_by_vector — query similar to Matrix/Inception
-    query_vec = [0.85, 0.15, 0.75, 0.25]
-    vec_candidates = candidates_by_vector(CATALOGUE, query_vec, threshold=0.9)
-    check("candidates_by_vector finds similar items",
-          len(vec_candidates) >= 1)
+    content_new = gen.content_based_candidates("new_user")
+    check("content-based: cold-start fallback returns items",
+          len(content_new) > 0)
 
-    very_diff_vec = [0.0, 1.0, 0.0, 1.0]
-    check("candidates_by_vector filters by threshold",
-          "item_001" not in candidates_by_vector(CATALOGUE, very_diff_vec, threshold=0.95))
+    # ── popularity_candidates ─────────────────────────────────────────────
+    popular = gen.popularity_candidates()
+    check("popularity: returns a list",
+          isinstance(popular, list))
+    check("popularity: within limit",
+          len(popular) <= 20)
+    check("popularity: item_1 (9.2) ranked first",
+          popular[0] == "item_1")
+    check("popularity: item_8 (7.2) ranked last",
+          popular[-1] == "item_8")
 
-    # candidates_from_history
-    history_cands = candidates_from_history(CATALOGUE, ["item_001"])
-    check("candidates_from_history excludes liked items",
-          "item_001" not in history_cands)
+    # ── hybrid_candidates ─────────────────────────────────────────────────
+    hybrid = gen.hybrid_candidates("user_A")
+    check("hybrid: returns a list",
+          isinstance(hybrid, list))
+    check("hybrid: within limit",
+          len(hybrid) <= 20)
+    check("hybrid: excludes already-liked items for user_A",
+          all(item not in HISTORY["user_A"] for item in hybrid))
 
-    check("candidates_from_history finds related sci-fi items",
-          any(c in history_cands for c in ["item_002", "item_004"]))
-
-    # candidates_by_popularity
-    popular = candidates_by_popularity(CATALOGUE, limit=3)
-    check("candidates_by_popularity returns 3 items",
-          len(popular) == 3)
-
-    check("candidates_by_popularity: Inception (8.8) ranked first",
-          popular[0] == "item_004")
-
-    # generate_candidates (combined)
-    combined = generate_candidates(
-        CATALOGUE,
-        query_tags={"sci-fi"},
-        liked_item_ids=["item_001"],
-        limit=10,
-    )
-    check("generate_candidates returns results",
-          len(combined) > 0)
-
-    check("generate_candidates excludes liked items",
-          "item_001" not in combined)
-
-    # Cold-start fallback
-    cold_start = generate_candidates(CATALOGUE, limit=5)
-    check("generate_candidates cold-start fallback returns items",
-          len(cold_start) > 0)
+    hybrid_new = gen.hybrid_candidates("new_user")
+    check("hybrid: cold-start returns items",
+          len(hybrid_new) > 0)
 
 
 # ══════════════════════════════════════════════════════
-#  MODULE 3 — scorer.py
+#  Component 3 — RecommendationScorer
 # ══════════════════════════════════════════════════════
 
 def test_scorer():
-    section("scorer.py")
-    from scorer import (
-        score_similarity,
-        score_popularity,
-        score_recency,
-        score_diversity_penalty,
-        compute_score,
-        rank_candidates,
-        explain_score,
-    )
+    section("Component 3: RecommendationScorer")
+    from scorer import RecommendationScorer
+    scorer = RecommendationScorer(item_catalogue=CATALOGUE, user_history=HISTORY)
 
-    matrix = CATALOGUE["item_001"]
-    toy    = CATALOGUE["item_003"]
+    # ── add_scorer ────────────────────────────────────────────────────────
+    scorer.add_scorer("custom", lambda u, i, c: 0.5, weight=0.1)
+    check("add_scorer: custom scorer registered",
+          "custom" in scorer._scorers)
 
-    # score_similarity
-    sim = score_similarity(matrix, query_vector=[0.9, 0.1, 0.8, 0.2])
-    check("score_similarity with identical vector ≈ 1",
-          sim > 0.99)
+    try:
+        scorer.add_scorer("bad", lambda u, i, c: 0.0, weight=-1)
+        check("add_scorer: rejects negative weight", False)
+    except ValueError:
+        check("add_scorer: rejects negative weight", True)
 
-    sim_tag = score_similarity(matrix, query_tags={"sci-fi", "action"})
-    check("score_similarity tag-based > 0",
-          sim_tag > 0)
+    # ── calculate_score ───────────────────────────────────────────────────
+    result = scorer.calculate_score("user_A", "item_7")
+    check("calculate_score: returns dict",
+          isinstance(result, dict))
+    check("calculate_score: has 'total' key",
+          "total" in result)
+    check("calculate_score: has 'signals' key",
+          "signals" in result)
+    check("calculate_score: has 'reason' key",
+          "reason" in result)
+    check("calculate_score: total in [0, 1]",
+          0.0 <= result["total"] <= 1.0)
+    check("calculate_score: signals dict is non-empty",
+          len(result["signals"]) > 0)
+    check("calculate_score: all signal values in [0, 1]",
+          all(0.0 <= v <= 1.0 for v in result["signals"].values()))
+    check("calculate_score: reason is a non-empty string",
+          isinstance(result["reason"], str) and len(result["reason"]) > 0)
 
-    check("score_similarity no query = 0",
-          close(score_similarity(matrix), 0.0))
+    # user_A is a sci-fi fan; item_7 is sci-fi → should score well
+    sci_fi_score  = scorer.calculate_score("user_A", "item_7")["total"]
+    romance_score = scorer.calculate_score("user_A", "item_4")["total"]
+    check("calculate_score: sci-fi scores higher than romance for sci-fi user",
+          sci_fi_score > romance_score)
 
-    # score_popularity
-    check("score_popularity 8.7/10 = 0.87",
-          close(score_popularity(matrix), 0.87))
+    # ── rank_candidates ───────────────────────────────────────────────────
+    candidates = ["item_4", "item_5", "item_6", "item_7", "item_8"]
+    ranked = scorer.rank_candidates("user_A", candidates, limit=3)
+    check("rank_candidates: returns list",
+          isinstance(ranked, list))
+    check("rank_candidates: respects limit",
+          len(ranked) <= 3)
+    check("rank_candidates: each result has item_id",
+          all("item_id" in r for r in ranked))
+    check("rank_candidates: sorted descending by total",
+          all(ranked[i]["total"] >= ranked[i+1]["total"] for i in range(len(ranked)-1)))
 
-    check("score_popularity 10.0 clamps to 1.0",
-          close(score_popularity({"rating": 10.0}), 1.0))
+    ranked_all = scorer.rank_candidates("user_A", candidates, limit=100)
+    check("rank_candidates: cannot exceed candidate count",
+          len(ranked_all) <= len(candidates))
 
-    check("score_popularity 0 = 0.0",
-          close(score_popularity({"rating": 0.0}), 0.0))
-
-    # score_recency
-    rec_2024 = score_recency({"year": 2024}, current_year=2024)
-    check("score_recency this year = 1.0",
-          close(rec_2024, 1.0))
-
-    rec_old = score_recency({"year": 1924}, current_year=2024, decay=0.05)
-    check("score_recency 100 years old ≈ 0 (well below 0.01)",
-          rec_old < 0.01)
-
-    rec_1999 = score_recency(matrix, current_year=2024, decay=0.05)
-    check("score_recency 1999 film is between 0 and 1",
-          0 < rec_1999 < 1)
-
-    # score_diversity_penalty
-    check("diversity_penalty empty list = 1.0",
-          close(score_diversity_penalty("x", matrix, []), 1.0))
-
-    # Very similar item → penalty applies
-    similar_item = {"tags": {"sci-fi", "action", "cyberpunk"}}
-    penalty = score_diversity_penalty("x", matrix, [similar_item])
-    check("diversity_penalty high similarity → < 1.0",
-          penalty < 1.0)
-
-    # compute_score
-    score = compute_score(
-        matrix,
-        query_vector=[0.9, 0.1, 0.8, 0.2],
-        query_tags={"sci-fi"},
-    )
-    check("compute_score returns value in [0, 1]",
-          0.0 <= score <= 1.0)
-
-    score_matrix = compute_score(matrix, query_vector=[0.9, 0.1, 0.8, 0.2])
-    score_toy    = compute_score(toy,    query_vector=[0.9, 0.1, 0.8, 0.2])
-    check("compute_score: Matrix scores higher than Toy Story for sci-fi query",
-          score_matrix > score_toy)
-
-    # rank_candidates
-    candidates   = list(CATALOGUE.keys())
-    ranked       = rank_candidates(
-        CATALOGUE, candidates,
-        query_vector=[0.9, 0.1, 0.8, 0.2],
-        top_k=3,
-    )
-    check("rank_candidates returns 3 results", len(ranked) == 3)
-    check("rank_candidates results have '_score' field",
-          all("_score" in item for item in ranked))
-
-    top_ids = [r["id"] for r in ranked]
-    check("rank_candidates: Matrix or Inception in top 2 results",
-          any(i in top_ids[:2] for i in ("item_001", "item_004")))
-
-    # explain_score
-    explanation = explain_score(matrix, query_vector=[0.9, 0.1, 0.8, 0.2])
-    check("explain_score returns all signal keys",
-          all(k in explanation for k in ["similarity", "popularity", "recency", "final"]))
-
-    check("explain_score values in [0,1]",
-          all(0.0 <= v <= 1.0 for v in explanation.values()))
+    # Cold-start user
+    ranked_new = scorer.rank_candidates("new_user", candidates, limit=5)
+    check("rank_candidates: works for cold-start user",
+          isinstance(ranked_new, list))
 
 
 # ══════════════════════════════════════════════════════
-#  MODULE 4 — evaluator.py
+#  Component 4 — RecommendationEvaluator
 # ══════════════════════════════════════════════════════
 
 def test_evaluator():
-    section("evaluator.py")
-    from evaluator import (
-        precision_at_k,
-        recall_at_k,
-        average_precision,
-        mean_average_precision,
-        dcg_at_k,
-        ndcg_at_k,
-        hit_rate_at_k,
-        coverage,
-        intra_list_diversity,
-        evaluate,
-        print_report,
-    )
+    section("Component 4: RecommendationEvaluator")
+    from evaluator import RecommendationEvaluator
+    ev = RecommendationEvaluator()
 
-    recommended = ["item_001", "item_002", "item_003", "item_004", "item_005"]
-    relevant    = {"item_001", "item_003", "item_005"}   # positions 1, 3, 5
+    recs     = ["item_1", "item_2", "item_3", "item_4", "item_5"]
+    relevant = {"item_1", "item_3", "item_5"}   # positions 1, 3, 5
 
-    # precision@k
-    check("precision@1 = 1.0 (first is relevant)",
-          close(precision_at_k(recommended, relevant, 1), 1.0))
+    # ── precision_at_k ────────────────────────────────────────────────────
+    check("precision@1 = 1.0  (item_1 is relevant)",
+          close(ev.precision_at_k(recs, relevant, 1), 1.0))
+    check("precision@2 = 0.5  (1 of 2 relevant)",
+          close(ev.precision_at_k(recs, relevant, 2), 0.5))
+    check("precision@5 = 0.6  (3 of 5 relevant)",
+          close(ev.precision_at_k(recs, relevant, 5), 0.6))
+    check("precision@k: k=0 returns 0.0",
+          close(ev.precision_at_k(recs, relevant, 0), 0.0))
+    check("precision@k: empty recs returns 0.0",
+          close(ev.precision_at_k([], relevant, 5), 0.0))
+    check("precision@k: empty relevant = 0.0",
+          close(ev.precision_at_k(recs, set(), 5), 0.0))
 
-    check("precision@2 = 0.5 (1 of 2 relevant)",
-          close(precision_at_k(recommended, relevant, 2), 0.5))
+    # ── recall_at_k ───────────────────────────────────────────────────────
+    check("recall@1 = 0.333  (1 of 3 found)",
+          close(ev.recall_at_k(recs, relevant, 1), 1/3))
+    check("recall@5 = 1.0   (all 3 found)",
+          close(ev.recall_at_k(recs, relevant, 5), 1.0))
+    check("recall@k: empty relevant returns 0.0",
+          close(ev.recall_at_k(recs, set(), 5), 0.0))
+    check("recall@k: empty recs returns 0.0",
+          close(ev.recall_at_k([], relevant, 5), 0.0))
 
-    check("precision@5 = 0.6 (3 of 5 relevant)",
-          close(precision_at_k(recommended, relevant, 5), 0.6))
+    # ── ndcg_at_k ─────────────────────────────────────────────────────────
+    check("ndcg@5: value in [0, 1]",
+          0.0 <= ev.ndcg_at_k(recs, relevant, 5) <= 1.0)
+    check("ndcg@5: imperfect ranking < 1.0",
+          ev.ndcg_at_k(recs, relevant, 5) < 1.0)
 
-    check("precision@k = 0 when k=0",
-          close(precision_at_k(recommended, relevant, 0), 0.0))
+    perfect_recs = ["item_1", "item_3", "item_5", "item_2", "item_4"]
+    check("ndcg@3: perfect ranking = 1.0",
+          close(ev.ndcg_at_k(perfect_recs, relevant, 3), 1.0))
 
-    # recall@k
-    check("recall@1 = 1/3 (1 of 3 relevant found)",
-          close(recall_at_k(recommended, relevant, 1), 1/3, tol=1e-5))
+    check("ndcg@k: empty relevant = 0.0",
+          close(ev.ndcg_at_k(recs, set(), 5), 0.0))
+    check("ndcg@k: k=0 returns 0.0",
+          close(ev.ndcg_at_k(recs, relevant, 0), 0.0))
 
-    check("recall@5 = 1.0 (all 3 relevant found)",
-          close(recall_at_k(recommended, relevant, 5), 1.0))
+    # ── evaluate_all ──────────────────────────────────────────────────────
+    recs_dict = {
+        "user_A": ["item_4", "item_5", "item_6", "item_7"],
+        "user_B": ["item_1", "item_5", "item_6"],
+        "user_C": ["item_1", "item_2"],           # no ground truth → skipped
+    }
+    ground_truth = {
+        "user_A": {"item_5", "item_6"},
+        "user_B": {"item_1"},
+    }
 
-    check("recall@k = 0 with empty relevant set",
-          close(recall_at_k(recommended, set(), 5), 0.0))
+    report = ev.evaluate_all(recs_dict, ground_truth, k=3)
+    check("evaluate_all: returns dict",
+          isinstance(report, dict))
+    check("evaluate_all: has precision@3 key",
+          "precision@3" in report)
+    check("evaluate_all: has recall@3 key",
+          "recall@3" in report)
+    check("evaluate_all: has ndcg@3 key",
+          "ndcg@3" in report)
+    check("evaluate_all: has num_users key",
+          "num_users" in report)
+    check("evaluate_all: has num_skipped key",
+          "num_skipped" in report)
+    check("evaluate_all: 2 users evaluated",
+          report["num_users"] == 2)
+    check("evaluate_all: 1 user skipped (no ground truth)",
+          report["num_skipped"] == 1)
+    check("evaluate_all: precision in [0, 1]",
+          0.0 <= report["precision@3"] <= 1.0)
+    check("evaluate_all: empty dicts return 0 users",
+          ev.evaluate_all({}, {}, k=5)["num_users"] == 0)
 
-    # average_precision
-    ap = average_precision(recommended, relevant)
-    check("average_precision > 0",
-          ap > 0)
-
-    check("average_precision ≤ 1",
-          ap <= 1.0)
-
-    perfect_ap = average_precision(["a", "b", "c"], {"a", "b", "c"})
-    check("average_precision perfect ranking = 1.0",
-          close(perfect_ap, 1.0))
-
-    # mean_average_precision
-    map_score = mean_average_precision(
-        [recommended, ["item_003", "item_004"]],
-        [relevant, {"item_003"}],
-    )
-    check("MAP is between 0 and 1",
-          0.0 <= map_score <= 1.0)
-
-    check("MAP empty input = 0",
-          close(mean_average_precision([], []), 0.0))
-
-    # dcg / ndcg
-    dcg = dcg_at_k(recommended, relevant, 5)
-    check("dcg@5 > 0", dcg > 0)
-
-    ndcg = ndcg_at_k(recommended, relevant, 5)
-    check("ndcg@5 in [0, 1]",
-          0.0 <= ndcg <= 1.0)
-
-    perfect_ndcg = ndcg_at_k(["a", "b", "c"], {"a", "b", "c"}, 3)
-    check("ndcg perfect ranking = 1.0",
-          close(perfect_ndcg, 1.0))
-
-    # hit_rate
-    check("hit_rate@1 = 1 (first item relevant)",
-          close(hit_rate_at_k(recommended, relevant, 1), 1.0))
-
-    check("hit_rate@1 = 0 when first item not relevant",
-          close(hit_rate_at_k(["item_002"], {"item_001"}, 1), 0.0))
-
-    # coverage
-    cov = coverage([["item_001", "item_002"], ["item_003"]], len(CATALOGUE))
-    check("coverage 3 of 5 items = 0.6",
-          close(cov, 0.6))
-
-    check("coverage zero catalogue = 0",
-          close(coverage([["item_001"]], 0), 0.0))
-
-    # intra_list_diversity
-    sci_fi_list = ["item_001", "item_002", "item_004"]   # all sci-fi → low diversity
-    mixed_list  = ["item_001", "item_003", "item_005"]   # mixed genres → higher diversity
-
-    div_sci_fi = intra_list_diversity(sci_fi_list, CATALOGUE)
-    div_mixed  = intra_list_diversity(mixed_list,  CATALOGUE)
-    check("diversity: mixed genres > similar genres",
-          div_mixed > div_sci_fi)
-
-    check("diversity single item = 0",
-          close(intra_list_diversity(["item_001"], CATALOGUE), 0.0))
-
-    # full evaluate report
-    report = evaluate(recommended, relevant, CATALOGUE, k_values=[1, 5])
-    check("evaluate report has precision@5",
-          "precision@5" in report)
-
-    check("evaluate report has ndcg@5",
-          "ndcg@5" in report)
-
-    check("evaluate report has diversity",
-          "diversity" in report)
-
-    print_report(report, title="Sample Evaluation Report")
+    ev.print_report(report, "Sample Evaluation Report")
 
 
 # ══════════════════════════════════════════════════════
-#  END-TO-END integration smoke test
+#  End-to-End Integration
 # ══════════════════════════════════════════════════════
 
 def test_end_to_end():
     section("End-to-End Integration")
-    from candidate_gen import generate_candidates
-    from scorer        import rank_candidates
-    from evaluator     import evaluate, print_report
+    from candidate_gen import CandidateGenerator
+    from scorer        import RecommendationScorer
+    from evaluator     import RecommendationEvaluator
 
-    # Simulate a user who liked The Matrix
-    liked    = ["item_001"]
-    query_v  = CATALOGUE["item_001"]["vector"]
-    query_t  = CATALOGUE["item_001"]["tags"]
+    gen    = CandidateGenerator(user_history=HISTORY, item_catalogue=CATALOGUE)
+    scorer = RecommendationScorer(item_catalogue=CATALOGUE, user_history=HISTORY)
+    ev     = RecommendationEvaluator()
 
-    # Step 1: generate candidates
-    candidates = generate_candidates(
-        CATALOGUE,
-        query_vector=query_v,
-        query_tags=query_t,
-        liked_item_ids=liked,
-        limit=10,
-    )
-    check("E2E: candidates generated",
-          len(candidates) > 0)
+    # Step 1: generate candidates for user_A
+    candidates = gen.hybrid_candidates("user_A")
+    check("E2E: candidates generated", len(candidates) > 0)
 
-    # Step 2: rank
-    ranked = rank_candidates(
-        CATALOGUE, candidates,
-        query_vector=query_v,
-        query_tags=query_t,
-        top_k=3,
-    )
-    check("E2E: ranked list has ≤ 3 items",
-          len(ranked) <= 3)
+    # Step 2: rank them
+    ranked = scorer.rank_candidates("user_A", candidates, limit=5)
+    check("E2E: ranked list ≤ 5 items", len(ranked) <= 5)
+
+    recommended_ids = [r["item_id"] for r in ranked]
+    check("E2E: ranked items have scores", all("total" in r for r in ranked))
+    check("E2E: ranked items have reasons", all("reason" in r for r in ranked))
 
     # Step 3: evaluate
-    recommended_ids = [r["id"] for r in ranked]
-    relevant        = {"item_002", "item_004"}    # Ground truth: similar sci-fi films
-    report          = evaluate(recommended_ids, relevant, CATALOGUE)
-    check("E2E: evaluation report produced",
-          len(report) > 0)
+    ground_truth = {"user_A": {"item_4", "item_5", "item_6", "item_7"}}
+    recs_dict    = {"user_A": recommended_ids}
+    report       = ev.evaluate_all(recs_dict, ground_truth, k=5)
 
-    print_report(report, "End-to-End Report (liked: The Matrix)")
+    check("E2E: evaluation report produced", len(report) > 0)
+    check("E2E: precision in [0, 1]", 0.0 <= report["precision@5"] <= 1.0)
+
+    print("\n  Top 5 recommendations for user_A:")
+    for i, r in enumerate(ranked, 1):
+        print(f"    {i}. {r['item_id']}  score={r['total']:.3f}  | {r['reason']}")
+
+    ev.print_report(report, "End-to-End: user_A Evaluation")
 
 
 # ══════════════════════════════════════════════════════

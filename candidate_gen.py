@@ -1,176 +1,172 @@
 """
 candidate_gen.py
 ────────────────
-Generates a shortlist of candidate items for a given user or query.
-Uses fast, lightweight filters before the expensive ranking step.
-
-Catalogue format (dict of item_id → item dict):
-    {
-        "item_001": {
-            "title":    "The Matrix",
-            "tags":     {"sci-fi", "action", "cyberpunk"},
-            "vector":   [0.1, 0.8, 0.3, ...],
-            "rating":   8.7,
-            "year":     1999,
-        },
-        ...
-    }
+Component 2: CandidateGenerator
+Generates a pool of candidate items to evaluate before scoring.
+Uses three strategies: collaborative, content-based, and popularity.
 """
 
-from similarity import cosine_similarity, jaccard_similarity
+
+# ── Sample in-memory data store (replaces a database for now) ─────────────────
+
+# User interaction history: {user_id: set of item_ids they liked}
+USER_HISTORY: dict[str, set[str]] = {
+    "user_A": {"item_1", "item_2", "item_3"},
+    "user_B": {"item_2", "item_3", "item_4"},
+    "user_C": {"item_3", "item_4", "item_5"},
+    "user_D": {"item_1", "item_5", "item_6"},
+}
+
+# Item metadata: {item_id: {tags, category, popularity_score}}
+ITEM_CATALOGUE: dict[str, dict] = {
+    "item_1": {"tags": {"sci-fi", "action"},   "category": "movie", "popularity": 9.2},
+    "item_2": {"tags": {"sci-fi", "drama"},    "category": "movie", "popularity": 8.5},
+    "item_3": {"tags": {"sci-fi", "thriller"}, "category": "movie", "popularity": 8.8},
+    "item_4": {"tags": {"drama", "romance"},   "category": "movie", "popularity": 7.9},
+    "item_5": {"tags": {"action", "comedy"},   "category": "movie", "popularity": 8.1},
+    "item_6": {"tags": {"animation", "family"},"category": "movie", "popularity": 8.3},
+    "item_7": {"tags": {"sci-fi", "comedy"},   "category": "movie", "popularity": 7.5},
+    "item_8": {"tags": {"thriller", "horror"}, "category": "movie", "popularity": 7.2},
+}
 
 
-# ── Tag-based filtering ───────────────────────────────────────────────────────
-
-def candidates_by_tags(
-    catalogue: dict,
-    query_tags: set[str],
-    min_overlap: int = 1,
-    limit: int = 50,
-) -> list[str]:
+class CandidateGenerator:
     """
-    Return item IDs whose tag sets share at least `min_overlap` tags
-    with `query_tags`.
-
-    Args:
-        catalogue:   Full item catalogue.
-        query_tags:  Tags we want to match (e.g. from a liked item or user profile).
-        min_overlap: Minimum number of shared tags required.
-        limit:       Maximum number of candidates to return.
-
-    Returns:
-        Sorted list of item IDs (descending tag overlap count).
+    Generates candidate item pools using three strategies:
+      1. Collaborative : items liked by users similar to the target user
+      2. Content-based : items sharing tags with the user's history
+      3. Popularity    : top-rated items overall (cold-start fallback)
+      4. Hybrid        : union of all three strategies
     """
-    scored = []
-    for item_id, item in catalogue.items():
-        item_tags = set(item.get("tags", []))
-        overlap   = len(query_tags & item_tags)
-        if overlap >= min_overlap:
-            scored.append((item_id, overlap))
 
-    # Sort by overlap descending, then by item_id for determinism
-    scored.sort(key=lambda x: (-x[1], x[0]))
-    return [item_id for item_id, _ in scored[:limit]]
+    def __init__(
+        self,
+        user_history:   dict[str, set[str]] | None = None,
+        item_catalogue: dict[str, dict]     | None = None,
+        limit: int = 20,
+    ):
+        self.user_history   = user_history   or USER_HISTORY
+        self.item_catalogue = item_catalogue or ITEM_CATALOGUE
+        self.limit          = limit
 
+    # ── Helper ────────────────────────────────────────────────────────────
 
-# ── Vector-based (ANN-lite) filtering ────────────────────────────────────────
+    def _user_similarity(self, user_a: str, user_b: str) -> float:
+        """Jaccard similarity between two users' liked-item sets."""
+        hist_a = self.user_history.get(user_a, set())
+        hist_b = self.user_history.get(user_b, set())
+        if not hist_a and not hist_b:
+            return 0.0
+        return len(hist_a & hist_b) / len(hist_a | hist_b)
 
-def candidates_by_vector(
-    catalogue: dict,
-    query_vector: list[float],
-    threshold: float = 0.5,
-    limit: int = 50,
-) -> list[str]:
-    """
-    Return item IDs whose embedding cosine-similarity to `query_vector`
-    exceeds `threshold`.
+    # ── Strategy 1: Collaborative Filtering ──────────────────────────────
 
-    In production this would be an ANN index (FAISS, ScaNN, etc.).
-    Here we do a brute-force scan — fine for small catalogues.
+    def collaborative_candidates(self, user_id: str) -> list[str]:
+        """
+        Items liked by users who are similar to user_id.
+        Excludes items the user has already seen.
+        Falls back to popularity candidates for cold-start users.
 
-    Returns:
-        Sorted list of item IDs (descending similarity).
-    """
-    scored = []
-    for item_id, item in catalogue.items():
-        vec = item.get("vector")
-        if vec is None:
-            continue
-        sim = cosine_similarity(query_vector, vec)
-        if sim >= threshold:
-            scored.append((item_id, sim))
+        Returns: list of item IDs (up to self.limit)
+        """
+        user_items = self.user_history.get(user_id, set())
 
-    scored.sort(key=lambda x: (-x[1], x[0]))
-    return [item_id for item_id, _ in scored[:limit]]
+        # Cold-start: no history → fall back to popularity
+        if not user_items:
+            return self.popularity_candidates()
 
+        # Find similar users (anyone who shares at least 1 liked item)
+        similar_users = [
+            other_id
+            for other_id in self.user_history
+            if other_id != user_id and self._user_similarity(user_id, other_id) > 0
+        ]
 
-# ── History-based filtering ───────────────────────────────────────────────────
+        # Gather items from similar users, weighted by similarity
+        item_votes: dict[str, float] = {}
+        for other_id in similar_users:
+            sim   = self._user_similarity(user_id, other_id)
+            items = self.user_history[other_id] - user_items   # exclude seen
+            for item in items:
+                item_votes[item] = item_votes.get(item, 0.0) + sim
 
-def candidates_from_history(
-    catalogue: dict,
-    liked_item_ids: list[str],
-    limit: int = 50,
-) -> list[str]:
-    """
-    Collect candidates that share tags with any item the user has liked.
-    Union of tag-based candidates for each liked item.
+        # Sort by vote weight descending
+        sorted_items = sorted(item_votes, key=lambda i: -item_votes[i])
+        return sorted_items[: self.limit]
 
-    Returns:
-        Deduplicated list of candidate IDs (excludes already-liked items).
-    """
-    seen_candidates: set[str] = set()
-    already_liked   = set(liked_item_ids)
+    # ── Strategy 2: Content-Based Filtering ──────────────────────────────
 
-    for liked_id in liked_item_ids:
-        if liked_id not in catalogue:
-            continue
-        tags = set(catalogue[liked_id].get("tags", []))
-        new_candidates = candidates_by_tags(catalogue, tags, min_overlap=1, limit=limit)
-        seen_candidates.update(new_candidates)
+    def content_based_candidates(self, user_id: str) -> list[str]:
+        """
+        Items that share tags with items the user has previously liked.
+        Excludes items the user has already seen.
+        Falls back to popularity candidates for cold-start users.
 
-    # Remove items the user already interacted with
-    candidates = [c for c in seen_candidates if c not in already_liked]
-    return candidates[:limit]
+        Returns: list of item IDs (up to self.limit)
+        """
+        user_items = self.user_history.get(user_id, set())
 
+        # Cold-start fallback
+        if not user_items:
+            return self.popularity_candidates()
 
-# ── Popularity-based fallback ─────────────────────────────────────────────────
+        # Build the user's 'taste profile' as a union of all liked-item tags
+        liked_tags: set[str] = set()
+        for item_id in user_items:
+            liked_tags |= self.item_catalogue.get(item_id, {}).get("tags", set())
 
-def candidates_by_popularity(
-    catalogue: dict,
-    limit: int = 20,
-    rating_key: str = "rating",
-) -> list[str]:
-    """
-    Fallback for cold-start: return the top-rated items overall.
-    Useful when there's no user history or query vector yet.
-    """
-    rated = [
-        (item_id, item.get(rating_key, 0.0))
-        for item_id, item in catalogue.items()
-    ]
-    rated.sort(key=lambda x: (-x[1], x[0]))
-    return [item_id for item_id, _ in rated[:limit]]
+        # Score unseen items by tag overlap with the taste profile
+        item_scores: dict[str, int] = {}
+        for item_id, meta in self.item_catalogue.items():
+            if item_id in user_items:
+                continue   # already seen
+            overlap = len(liked_tags & meta.get("tags", set()))
+            if overlap > 0:
+                item_scores[item_id] = overlap
 
+        sorted_items = sorted(item_scores, key=lambda i: -item_scores[i])
+        return sorted_items[: self.limit]
 
-# ── Combined candidate generation ─────────────────────────────────────────────
+    # ── Strategy 3: Popularity (cold-start fallback) ──────────────────────
 
-def generate_candidates(
-    catalogue: dict,
-    query_tags:    set[str]   | None = None,
-    query_vector:  list[float]| None = None,
-    liked_item_ids: list[str] | None = None,
-    limit: int = 50,
-) -> list[str]:
-    """
-    Master function: combine all candidate sources and deduplicate.
+    def popularity_candidates(self) -> list[str]:
+        """
+        Top items by overall popularity score.
+        Used when there is no user history available.
 
-    Priority order: vector → tags → history → popularity fallback.
-    Returns at most `limit` unique candidate IDs.
-    """
-    candidates: set[str] = set()
-
-    liked_set = set(liked_item_ids or [])
-
-    if query_vector is not None:
-        candidates.update(
-            candidates_by_vector(catalogue, query_vector, threshold=0.3, limit=limit)
+        Returns: list of item IDs (up to self.limit)
+        """
+        sorted_items = sorted(
+            self.item_catalogue,
+            key=lambda i: -self.item_catalogue[i].get("popularity", 0.0),
         )
+        return sorted_items[: self.limit]
 
-    if query_tags:
-        candidates.update(
-            candidates_by_tags(catalogue, query_tags, min_overlap=1, limit=limit)
-        )
+    # ── Strategy 4: Hybrid ────────────────────────────────────────────────
 
-    if liked_item_ids:
-        candidates.update(
-            candidates_from_history(catalogue, liked_item_ids, limit=limit)
-        )
+    def hybrid_candidates(self, user_id: str) -> list[str]:
+        """
+        Combines collaborative, content-based, and popularity candidates.
+        Deduplicates and returns up to self.limit items.
+        Gives priority to items appearing in multiple strategies.
 
-    # Fall back to popularity if still empty
-    if not candidates:
-        candidates.update(candidates_by_popularity(catalogue, limit=limit))
+        Returns: list of item IDs (up to self.limit)
+        """
+        collab   = set(self.collaborative_candidates(user_id))
+        content  = set(self.content_based_candidates(user_id))
+        popular  = set(self.popularity_candidates())
 
-    # Always exclude already-liked items
-    candidates -= liked_set
+        # Remove items the user already liked
+        user_items = self.user_history.get(user_id, set())
 
-    return list(candidates)[:limit]
+        # Items appearing in more strategies rank first
+        vote_count: dict[str, int] = {}
+        for item in (collab | content | popular) - user_items:
+            vote_count[item] = (
+                (1 if item in collab  else 0)
+                + (1 if item in content else 0)
+                + (1 if item in popular else 0)
+            )
+
+        sorted_items = sorted(vote_count, key=lambda i: -vote_count[i])
+        return sorted_items[: self.limit]
